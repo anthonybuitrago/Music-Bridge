@@ -8,7 +8,7 @@ def load_config():
     with open('config.json', 'r') as f:
         return json.load(f)
 
-def sync_to_spotify():
+def sync_to_spotify(progress_callback=None):
     print("=== STARTING SPOTIFY SYNC ===")
     
     config = load_config()
@@ -29,24 +29,31 @@ def sync_to_spotify():
     # 2. Get YT Playlists
     yt_playlists = yt_manager.get_my_playlists()
     
+    # Filter first to get accurate count
+    playlists_to_sync = [p for p in yt_playlists if "[Sorted]" in p['title']]
+    total_playlists = len(playlists_to_sync)
+    
+    print(f"Found {total_playlists} sorted playlists to sync.")
+    
     missing_tracks = [] # (Playlist, Artist, Title)
 
-    for p in yt_playlists:
+    for i, p in enumerate(playlists_to_sync):
         title = p['title']
         pid = p['playlistId']
         
-        # Only sync the [Sorted] versions to keep it clean?
-        # Or sync everything? Let's sync the [Sorted] ones as they are the "Master" lists now.
-        if "[Sorted]" not in title:
-            continue
-            
         # Clean name for Spotify (Remove [Sorted] tag for cleaner look?)
         spotify_title = title.replace(" [Sorted]", "")
         
+        msg = f"Syncing '{spotify_title}'..."
         try:
-            print(f"\nSyncing '{spotify_title}'...")
+            print(f"\n[{i+1}/{total_playlists}] {msg}")
         except UnicodeEncodeError:
-            print(f"\nSyncing '{spotify_title.encode('ascii', 'ignore').decode('ascii')}'...")
+            safe_title = spotify_title.encode('ascii', 'ignore').decode('ascii')
+            msg = f"Syncing '{safe_title}'..."
+            print(f"\n[{i+1}/{total_playlists}] {msg}")
+
+        if progress_callback:
+            progress_callback(i+1, total_playlists, msg)
 
         # Create/Get Spotify Playlist
         sp_playlist_id = sp_manager.create_playlist(spotify_title)
@@ -93,6 +100,9 @@ def sync_to_spotify():
         print("Report saved to missing_on_spotify.md")
     else:
         print("\n=== SYNC COMPLETE. PERFECT MATCH! ===")
+    
+    if progress_callback:
+        progress_callback(total_playlists, total_playlists, "Sync Complete!")
 
 if __name__ == "__main__":
     sync_to_spotify()

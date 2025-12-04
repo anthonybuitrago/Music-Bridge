@@ -2,7 +2,7 @@ import sqlite3
 import os
 
 class DBManager:
-    def __init__(self, db_path='yt_library.db'):
+    def __init__(self, db_path='music_library.db'):
         self.db_path = db_path
         self.conn = None
         self.cursor = None
@@ -66,7 +66,12 @@ class DBManager:
 
         title = track_data.get('title', '')
         artists = track_data.get('artists', [])
-        artist_name = artists[0]['name'] if artists else "Unknown"
+        # Join all artists
+        if isinstance(artists, list):
+            artist_name = ", ".join([a['name'] for a in artists])
+        else:
+            artist_name = str(artists) if artists else "Unknown"
+            
         album = track_data.get('album', {}).get('name') if track_data.get('album') else None
         duration = track_data.get('duration')
         is_explicit = track_data.get('isExplicit', False)
@@ -99,6 +104,21 @@ class DBManager:
             JOIN tracks t ON pt.video_id = t.video_id
             WHERE t.artist = ?
         ''', (artist,))
+        return [r[0] for r in self.cursor.fetchall()]
+
+    def get_all_playlists(self):
+        """Returns all playlists stored in the DB."""
+        self.cursor.execute('SELECT id, title, description FROM playlists')
+        return [{'id': r[0], 'title': r[1], 'description': r[2]} for r in self.cursor.fetchall()]
+
+    def get_playlist_tracks(self, playlist_id):
+        """Returns all video_ids for a playlist, ordered by insertion (rowid)."""
+        self.cursor.execute('''
+            SELECT video_id 
+            FROM playlist_tracks 
+            WHERE playlist_id = ? 
+            ORDER BY rowid
+        ''', (playlist_id,))
         return [r[0] for r in self.cursor.fetchall()]
 
     def close(self):

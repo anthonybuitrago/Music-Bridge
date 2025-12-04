@@ -18,6 +18,7 @@ headers_auth.json
 oauth.json
 browser.json
 client_secret*.json
+config.json
 
 # Logs & Reports
 *.log
