@@ -1,0 +1,16 @@
+{
+    "spotify": {
+        "client_id": "YOUR_SPOTIFY_CLIENT_ID_HERE",
+        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET_HERE",
+        "redirect_uri": "http://127.0.0.1:8888/callback"
+    },
+    "youtube": {
+        "headers_file": "headers_auth.json",
+        "user_filter": "Anthony Buitrago"
+    },
+    "settings": {
+        "source_playlist_keyword": "Shazam",
+        "inbox_playlist_name": "Inbox / Por Clasificar",
+        "sorted_suffix": " [Sorted]"
+    }
+}
