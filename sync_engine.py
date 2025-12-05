@@ -1,108 +1,139 @@
 from spotify_manager import SpotifyManager
 from sorter import PlaylistManager
 import time
-
 import json
 
 def load_config():
     with open('config.json', 'r') as f:
         return json.load(f)
 
-def sync_to_spotify(progress_callback=None):
-    print("=== STARTING SPOTIFY SYNC ===")
-    
-    config = load_config()
-    spotify_config = config['spotify']
-    
-    # 1. Init Managers
-    try:
-        sp_manager = SpotifyManager(
-            spotify_config['client_id'], 
-            spotify_config['client_secret'],
-            spotify_config['redirect_uri']
-        )
-        yt_manager = PlaylistManager()
-    except Exception as e:
-        print(f"Failed to initialize: {e}")
-        return
+class SyncEngine:
+    def __init__(self):
+        self.config = load_config()
+        self.sp_config = self.config['spotify']
+        self.sp = None
+        self.yt = None
+        
+    def connect(self):
+        if not self.sp:
+            self.sp = SpotifyManager(
+                self.sp_config['client_id'], 
+                self.sp_config['client_secret'],
+                self.sp_config['redirect_uri']
+            )
+        if not self.yt:
+            self.yt = PlaylistManager()
 
-    # 2. Get YT Playlists
-    yt_playlists = yt_manager.get_my_playlists()
-    
-    # Filter first to get accurate count
-    playlists_to_sync = [p for p in yt_playlists if "[Sorted]" in p['title']]
-    total_playlists = len(playlists_to_sync)
-    
-    print(f"Found {total_playlists} sorted playlists to sync.")
-    
-    missing_tracks = [] # (Playlist, Artist, Title)
+    def get_playlists(self):
+        self.connect()
+        yt_pl = self.yt.get_my_playlists()
+        sp_pl = self.sp.get_user_playlists()
+        
+        # Filter out unwanted playlists
+        ignored_titles = ["Your Likes", "Liked Songs", "Liked Music", "Watch Later", "Episodes for Later"]
+        
+        yt_pl = [p for p in yt_pl if p['title'] not in ignored_titles]
+        sp_pl = [p for p in sp_pl if p['name'] not in ignored_titles]
+        
+        # Sort alphabetically
+        yt_pl.sort(key=lambda x: x['title'].lower())
+        sp_pl.sort(key=lambda x: x['name'].lower())
+        
+        return yt_pl, sp_pl
 
-    for i, p in enumerate(playlists_to_sync):
-        title = p['title']
-        pid = p['playlistId']
+    def sync_to_spotify(self, yt_playlist_id, sp_playlist_name=None, smart=True, progress_callback=None):
+        self.connect()
         
-        # Clean name for Spotify (Remove [Sorted] tag for cleaner look?)
-        spotify_title = title.replace(" [Sorted]", "")
+        # Get Source Tracks
+        yt_tracks = self.yt.get_playlist_tracks(yt_playlist_id)
         
-        msg = f"Syncing '{spotify_title}'..."
-        try:
-            print(f"\n[{i+1}/{total_playlists}] {msg}")
-        except UnicodeEncodeError:
-            safe_title = spotify_title.encode('ascii', 'ignore').decode('ascii')
-            msg = f"Syncing '{safe_title}'..."
-            print(f"\n[{i+1}/{total_playlists}] {msg}")
-
-        if progress_callback:
-            progress_callback(i+1, total_playlists, msg)
-
-        # Create/Get Spotify Playlist
-        sp_playlist_id = sp_manager.create_playlist(spotify_title)
-        
-        # Get YT Tracks
-        yt_tracks = yt_manager.get_playlist_tracks(pid)
-        print(f"  - Found {len(yt_tracks)} tracks on YT.")
-        
-        spotify_uris = []
-        
-        for track in yt_tracks:
-            artist = track['artists'][0]['name'] if track.get('artists') else "Unknown"
-            track_title = track['title']
+        # Determine Target Name
+        if not sp_playlist_name:
+            try:
+                # Fetch playlist info to get title
+                pl_info = self.yt.yt.get_playlist(yt_playlist_id, limit=1) # Limit 1 just to get metadata
+                sp_playlist_name = pl_info.get('title', 'Synced Playlist')
+            except:
+                sp_playlist_name = "Synced Playlist"
             
-            uri = sp_manager.search_track(artist, track_title)
+        if progress_callback: progress_callback(0, 0, f"Preparing to sync to '{sp_playlist_name}'...")
+            
+        # Create/Get Target
+        sp_playlist_id = self.sp.create_playlist(sp_playlist_name)
+        
+        # Get Existing Target Tracks (for Smart Sync)
+        existing_uris = set()
+        if smart:
+            current_tracks = self.sp.get_playlist_tracks(sp_playlist_id)
+            existing_uris = {t['uri'] for t in current_tracks}
+            
+        # Match Tracks
+        to_add = []
+        total = len(yt_tracks)
+        
+        for i, track in enumerate(yt_tracks):
+            artist = track['artists'][0]['name'] if track.get('artists') else "Unknown"
+            title = track['title']
+            
+            if progress_callback and i % 5 == 0:
+                progress_callback(i+1, total, f"Matching: {title}")
+            
+            uri = self.sp.search_track(artist, title)
             if uri:
-                spotify_uris.append(uri)
-                # print(f"    + Found: {artist} - {track_title}")
+                if not smart or uri not in existing_uris:
+                    to_add.append(uri)
             else:
-                try:
-                    print(f"    - MISSING: {artist} - {track_title}")
-                except UnicodeEncodeError:
-                    safe_artist = artist.encode('ascii', 'ignore').decode('ascii')
-                    safe_title = track_title.encode('ascii', 'ignore').decode('ascii')
-                    print(f"    - MISSING: {safe_artist} - {safe_title}")
-                missing_tracks.append((spotify_title, artist, track_title))
-        
-        # Add to Spotify (Clean Sync)
-        if spotify_uris:
-            print(f"  - Syncing {len(spotify_uris)} tracks to Spotify (Overwriting)...")
-            sp_manager.replace_tracks_in_playlist(sp_playlist_id, spotify_uris)
-        
-        time.sleep(1)
+                print(f"Missing on Spotify: {artist} - {title}")
+                
+        # Execute
+        if to_add:
+            if progress_callback: progress_callback(total, total, f"Adding {len(to_add)} tracks...")
+            self.sp.add_tracks_to_playlist(sp_playlist_id, to_add)
+            return f"Added {len(to_add)} tracks."
+        else:
+            return "No new tracks to add."
 
-    # Report Missing
-    if missing_tracks:
-        print(f"\n=== SYNC COMPLETE. {len(missing_tracks)} MISSING TRACKS ===")
-        with open("missing_on_spotify.md", "w", encoding="utf-8") as f:
-            f.write("# Missing Tracks Report\n\n")
-            f.write("| Playlist | Artist | Title |\n")
-            f.write("| --- | --- | --- |\n")
-            for pl, art, tit in missing_tracks:
-                f.write(f"| {pl} | {art} | {tit} |\n")
-        print("Report saved to missing_on_spotify.md")
-    else:
-        print("\n=== SYNC COMPLETE. PERFECT MATCH! ===")
-    
-    if progress_callback:
-        progress_callback(total_playlists, total_playlists, "Sync Complete!")
+    def sync_to_youtube(self, sp_playlist_id, yt_playlist_name=None, smart=True, progress_callback=None):
+        self.connect()
+        
+        # Get Source
+        sp_tracks = self.sp.get_playlist_tracks(sp_playlist_id)
+        
+        if not yt_playlist_name:
+            yt_playlist_name = "Imported from Spotify"
+            
+        if progress_callback: progress_callback(0, 0, f"Preparing import to '{yt_playlist_name}'...")
+            
+        # Create/Get Target (YT doesn't have easy "get by name", so we usually create new)
+        # For now, let's always create new or append if we can find it?
+        # Sorter.py has create_playlist.
+        
+        # We'll just create a new one for safety or append if we implement search.
+        # Let's create new for now.
+        yt_playlist_id = self.yt.create_playlist(yt_playlist_name, "Imported from Spotify")
+        
+        # Match Tracks (YT Music Search)
+        # YTMusicAPI search is powerful.
+        
+        video_ids = []
+        total = len(sp_tracks)
+        
+        for i, track in enumerate(sp_tracks):
+            query = f"{track['artist']} {track['title']}"
+            if progress_callback and i % 5 == 0:
+                progress_callback(i+1, total, f"Searching: {track['title']}")
+                
+            results = self.yt.yt.search(query, filter="songs", limit=1)
+            if results:
+                video_ids.append(results[0]['videoId'])
+            else:
+                print(f"Missing on YT: {query}")
+                
+        # Add
+        if video_ids:
+            if progress_callback: progress_callback(total, total, f"Importing {len(video_ids)} tracks...")
+            self.yt.add_tracks(yt_playlist_id, video_ids)
+            return f"Imported {len(video_ids)} tracks."
+        else:
+            return "No tracks found to import."
 
-if __name__ == "__main__":
-    sync_to_spotify()

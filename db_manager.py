@@ -37,6 +37,17 @@ class DBManager:
                 FOREIGN KEY(video_id) REFERENCES tracks(video_id)
             )
         ''')
+        
+        # Ensure Unique Constraint (Prevent Duplicates)
+        try:
+            self.cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_tracks_unique 
+                ON playlist_tracks(playlist_id, video_id)
+            ''')
+        except sqlite3.Error:
+            # This might fail if duplicates already exist. 
+            # We'll ignore it here; the user must run the "Fix Issues" tool to clean up first.
+            pass
 
         # Playlists table
         self.cursor.execute('''
@@ -278,6 +289,34 @@ class DBManager:
             })
             
         return results
+
+    def remove_local_duplicates(self):
+        """
+        Removes duplicate entries from playlist_tracks table.
+        Keeps only the instance with the lowest rowid (first added).
+        """
+        self.cursor.execute('''
+            DELETE FROM playlist_tracks 
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid) 
+                FROM playlist_tracks 
+                GROUP BY playlist_id, video_id
+            )
+        ''')
+        removed = self.cursor.rowcount
+        
+        # Now that duplicates are gone, enforce the constraint permanently
+        try:
+            self.cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_tracks_unique 
+                ON playlist_tracks(playlist_id, video_id)
+            ''')
+        except Exception as e:
+            print(f"Warning: Could not create unique index: {e}")
+            
+        self.conn.commit()
+        return removed
+
 
     def close(self):
         if self.conn:

@@ -21,7 +21,28 @@ class SpotifyManager:
         while results['next']:
             results = self.sp.next(results)
             playlists.extend(results['items'])
-        return {p['name']: p['id'] for p in playlists}
+        return [{'name': p['name'], 'id': p['id']} for p in playlists]
+
+    def get_playlist_tracks(self, playlist_id):
+        """Returns list of dicts: {'artist': ..., 'title': ..., 'uri': ...}"""
+        tracks = []
+        results = self.sp.playlist_items(playlist_id, additional_types=['track'])
+        items = results['items']
+        while results['next']:
+            results = self.sp.next(results)
+            items.extend(results['items'])
+            
+        for item in items:
+            track = item.get('track')
+            if not track or track.get('is_local'): continue
+            
+            artists = ", ".join([a['name'] for a in track['artists']])
+            tracks.append({
+                'artist': artists,
+                'title': track['name'],
+                'uri': track['uri']
+            })
+        return tracks
 
     def create_playlist(self, name, description="Synced from YouTube Music"):
         # Check if exists first

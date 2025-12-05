@@ -14,7 +14,7 @@ def scan_library(progress_callback=None, force_update=False):
     pm = PlaylistManager()
     db = DBManager()
     
-    # logger.info("Fetching playlists from YouTube Music...")
+    logger.info("Fetching playlists from YouTube Music...")
     if progress_callback:
         progress_callback(0, 0, "Fetching playlists...")
         
@@ -28,7 +28,7 @@ def scan_library(progress_callback=None, force_update=False):
     valid_playlists = [p for p in playlists if p['playlistId'] not in ignored_ids]
     
     total = len(valid_playlists)
-    # logger.info(f"Found {total} user playlists (filtered system lists).")
+    logger.info(f"Found {total} user playlists (filtered system lists).")
     
     # --- SYNC DELETIONS ---
     # (Keep existing deletion logic)
@@ -63,7 +63,7 @@ def scan_library(progress_callback=None, force_update=False):
         if not force_update and local_count == remote_count:
             skipped_count += 1
             msg = f"Skipping: {title} (No changes)"
-            # logger.info(f"[{i+1}/{total}] {msg}")
+            logger.info(f"[{i+1}/{total}] {msg}")
             if progress_callback:
                 progress_callback(i+1, total, msg)
         else:
@@ -71,7 +71,7 @@ def scan_library(progress_callback=None, force_update=False):
 
     # Parallel Scan for the rest
     if to_scan:
-        # logger.info(f"Scanning {len(to_scan)} playlists in parallel...")
+        logger.info(f"Scanning {len(to_scan)} playlists in parallel...")
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Submit all tasks
             future_to_meta = {
@@ -84,7 +84,7 @@ def scan_library(progress_callback=None, force_update=False):
                 pid = p['playlistId']
                 
                 msg = f"📂 {title}"
-                # logger.info(msg) # Removed per user request
+                logger.info(msg)
                 
                 if progress_callback:
                     progress_callback(i+1, total, msg)
@@ -108,12 +108,12 @@ def scan_library(progress_callback=None, force_update=False):
                     logger.error(f"Error scanning {title}: {e}")
 
     # --- CLEANUP & EXPORT ---
-    # logger.info("Running database cleanup...")
+    logger.info("Running database cleanup...")
     dt, da = db.cleanup_orphans()
     if dt > 0 or da > 0:
         logger.info(f"Cleaned {dt} orphan tracks and {da} orphan artists.")
         
-    # logger.info("Exporting library backup...")
+    logger.info("Exporting library backup...")
     try:
         import json
         playlists = db.get_all_playlists()
@@ -126,12 +126,12 @@ def scan_library(progress_callback=None, force_update=False):
             
         with open('library_backup.json', 'w', encoding='utf-8') as f:
             json.dump(library_data, f, indent=2, ensure_ascii=False)
-        # logger.info("Backup saved to library_backup.json")
+        logger.info("Backup saved to library_backup.json")
     except Exception as e:
         logger.error(f"Backup failed: {e}")
     # ------------------------
 
-    # logger.info("Scan complete.")
+    logger.info("Scan complete.")
     if progress_callback:
         progress_callback(total, total, "Library Scan Completed.")
         
