@@ -2,15 +2,15 @@ import customtkinter as ctk
 import sys
 import threading
 import io
+import logging
 from datetime import datetime
 
 # Import our tools
-# We might need to adjust them to be importable without running immediately
-# (Most have if __name__ == "__main__", so we are good)
 import scanner
 import sorter
 import sync_engine
 import restore_library
+import smart_playlists
 
 class TextRedirector(io.StringIO):
     def __init__(self, text_widget):
@@ -21,9 +21,25 @@ class TextRedirector(io.StringIO):
         self.text_widget.insert("end", str)
         self.text_widget.see("end")
         self.text_widget.configure(state="disabled")
-
+        
     def flush(self):
         pass
+
+class GuiHandler(logging.Handler):
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+        self.formatter = logging.Formatter('%(message)s')
+
+    def emit(self, record):
+        msg = self.format(record)
+        def append():
+            self.text_widget.configure(state="normal")
+            self.text_widget.insert("end", msg + "\n")
+            self.text_widget.see("end")
+            self.text_widget.configure(state="disabled")
+        # Ensure thread safety for GUI updates
+        self.text_widget.after(0, append)
 
 class MusicBridgeApp(ctk.CTk):
     def __init__(self):
@@ -57,8 +73,11 @@ class MusicBridgeApp(ctk.CTk):
         self.btn_tools = ctk.CTkButton(self.sidebar_frame, text="🛠️ Tools", font=ctk.CTkFont(family="Segoe UI Emoji", size=14), command=lambda: self.show_frame("tools"))
         self.btn_tools.grid(row=4, column=0, padx=20, pady=10)
 
+        self.btn_organizer = ctk.CTkButton(self.sidebar_frame, text="🌍 Organizer", font=ctk.CTkFont(family="Segoe UI Emoji", size=14), command=lambda: self.show_frame("organizer"))
+        self.btn_organizer.grid(row=5, column=0, padx=20, pady=10)
+
         self.btn_settings = ctk.CTkButton(self.sidebar_frame, text="⚙️ Settings", font=ctk.CTkFont(family="Segoe UI Emoji", size=14), command=lambda: self.show_frame("settings"))
-        self.btn_settings.grid(row=5, column=0, padx=20, pady=10)
+        self.btn_settings.grid(row=6, column=0, padx=20, pady=10)
 
         # Main Content Area
         self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -88,37 +107,56 @@ class MusicBridgeApp(ctk.CTk):
         self.lbl_total_playlists = ctk.CTkLabel(stats_frame, text="Playlists: Loading...", font=ctk.CTkFont(size=16))
         self.lbl_total_playlists.pack(side="left", padx=20, pady=20)
         
-        ctk.CTkButton(dash, text="🔄 Refresh Stats", command=self.refresh_stats).pack(pady=10)
+
+
+        # --- Playlist Breakdown ---
+        ctk.CTkLabel(dash, text="Playlist Breakdown", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(20, 10))
+        self.playlists_frame = ctk.CTkScrollableFrame(dash, width=700, height=200)
+        self.playlists_frame.pack(pady=10, padx=20)
+        
+        # --- Scan Results ---
+        ctk.CTkLabel(dash, text="Scan Results", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=(20, 10))
+        self.report_box = ctk.CTkTextbox(dash, width=700, height=150)
+        self.report_box.pack(pady=10, padx=20)
+        self.report_box.insert("0.0", "Ready to scan.")
+        self.report_box.configure(state="disabled")
 
         # --- Library Frame (Existing Functionality) ---
         lib = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.frames["library"] = lib
         
-        ctk.CTkLabel(lib, text="Library Management", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=20)
+        ctk.CTkLabel(lib, text="Library Management", font=ctk.CTkFont(size=28, weight="bold")).pack(pady=(20, 30))
         
-        # Actions Frame
-        btn_frame = ctk.CTkFrame(lib)
-        btn_frame.pack(pady=10, fill="x", padx=20)
+        # Card Color (Slightly lighter than background)
+        card_color = "#2B2B2B" 
         
-        ctk.CTkLabel(btn_frame, text="Global Actions", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        # Actions Card
+        btn_frame = ctk.CTkFrame(lib, fg_color=card_color, corner_radius=10)
+        btn_frame.pack(pady=10, fill="x", padx=40)
+        
+        ctk.CTkLabel(btn_frame, text="Global Actions", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(15, 10))
         
         action_btns = ctk.CTkFrame(btn_frame, fg_color="transparent")
-        action_btns.pack(pady=5)
+        action_btns.pack(pady=(0, 15))
         
-        ctk.CTkButton(action_btns, text="🔍 Scan Library", command=self.run_scan).pack(side="left", padx=10)
-        ctk.CTkButton(action_btns, text="📂 Sort All", command=self.run_sort).pack(side="left", padx=10)
-        ctk.CTkButton(action_btns, text="↩️ Restore Backup", command=self.run_restore, fg_color="transparent", border_width=2).pack(side="left", padx=10)
+        ctk.CTkButton(action_btns, text="🔍 Scan Library", command=self.run_scan, height=35).pack(side="left", padx=10)
+        
+        self.chk_force = ctk.CTkCheckBox(action_btns, text="Force Full Scan")
+        self.chk_force.pack(side="left", padx=10)
+        
+        ctk.CTkButton(action_btns, text="📂 Sort All", command=self.run_sort, height=35).pack(side="left", padx=10)
+        ctk.CTkButton(action_btns, text="↩️ Restore Backup", command=self.run_restore, fg_color="transparent", border_width=2, height=35).pack(side="left", padx=10)
 
-        # Duplicate Cleaner Section
-        cleaner_frame = ctk.CTkFrame(lib)
-        cleaner_frame.pack(pady=20, fill="x", padx=20)
+        # Duplicate Cleaner Card
+        cleaner_frame = ctk.CTkFrame(lib, fg_color=card_color, corner_radius=10)
+        cleaner_frame.pack(pady=20, fill="x", padx=40)
         
-        ctk.CTkLabel(cleaner_frame, text="Duplicate Cleaner", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        ctk.CTkLabel(cleaner_frame, text="Duplicate Cleaner", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(15, 10))
         
-        self.playlist_combo = ctk.CTkComboBox(cleaner_frame, values=["Loading..."], width=300)
+        self.playlist_combo = ctk.CTkComboBox(cleaner_frame, values=["Loading..."], width=300, height=35)
         self.playlist_combo.pack(pady=5)
         
-        ctk.CTkButton(cleaner_frame, text="🧹 Remove Duplicates", command=self.run_cleaner).pack(pady=5)
+        ctk.CTkButton(cleaner_frame, text="🧹 Remove Duplicates", command=self.run_cleaner, height=35, fg_color="#e74c3c", hover_color="#c0392b").pack(pady=(10, 15))
         
         # Refresh playlists for combo
         self.after(1000, self.load_playlists_to_combo)
@@ -153,11 +191,6 @@ class MusicBridgeApp(ctk.CTk):
         import_frame.pack(pady=20, fill="x", padx=20)
         ctk.CTkLabel(import_frame, text="Import from Spotify", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         
-        self.spotify_url_entry = ctk.CTkEntry(import_frame, placeholder_text="Spotify Playlist URL", width=400)
-        self.spotify_url_entry.pack(pady=5)
-        
-        ctk.CTkButton(import_frame, text="⬇️ Import to YouTube", command=self.run_reverse_sync).pack(pady=10)
-
         # --- Tools Frame ---
         tools = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.frames["tools"] = tools
@@ -179,6 +212,25 @@ class MusicBridgeApp(ctk.CTk):
         
         ctk.CTkButton(sp_frame, text="✨ Create Smart Playlist", command=self.run_smart_playlist).pack(pady=10)
 
+        # --- Organizer Frame ---
+        org = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        self.frames["organizer"] = org
+        
+        ctk.CTkLabel(org, text="Global Library Organizer", font=ctk.CTkFont(size=24, weight="bold")).pack(pady=20)
+        
+        # Controls
+        controls = ctk.CTkFrame(org, fg_color="transparent")
+        controls.pack(fill="x", padx=20)
+        
+        ctk.CTkButton(controls, text="🔄 Scan for Conflicts", command=self.refresh_organizer).pack(side="left")
+        
+        self.org_status_label = ctk.CTkLabel(controls, text="Ready to scan.", text_color="gray")
+        self.org_status_label.pack(side="left", padx=20)
+        
+        # Scrollable Area
+        self.org_scroll = ctk.CTkScrollableFrame(org)
+        self.org_scroll.pack(fill="both", expand=True, padx=20, pady=10)
+
         # --- Settings Frame ---
         settings = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.frames["settings"] = settings
@@ -195,9 +247,14 @@ class MusicBridgeApp(ctk.CTk):
             
         ctk.CTkButton(settings, text="💾 Save Config", command=self.save_config).pack(pady=10)
 
-        # Redirect stdout (Default to Library console for now)
+        # Redirect stdout/stderr
         sys.stdout = TextRedirector(self.console_box)
         sys.stderr = TextRedirector(self.console_box)
+        
+        # Attach Logger Handler
+        logger = logging.getLogger("MusicBridge")
+        gui_handler = GuiHandler(self.console_box)
+        logger.addHandler(gui_handler)
 
     def show_frame(self, name):
         # Hide all
@@ -214,18 +271,35 @@ class MusicBridgeApp(ctk.CTk):
         try:
             from db_manager import DBManager
             db = DBManager()
-            # We need to add count methods to DBManager or run raw queries
-            # For now, raw queries via cursor if possible, or add methods.
-            # Let's assume we can add methods later.
-            # Hacky way for now:
+            
+            # Total Tracks
             db.cursor.execute("SELECT COUNT(*) FROM tracks")
             count_tracks = db.cursor.fetchone()[0]
+            
+            # Total Playlists
             db.cursor.execute("SELECT COUNT(*) FROM playlists")
             count_playlists = db.cursor.fetchone()[0]
+            
+            # Playlist Breakdown
+            db.cursor.execute("SELECT title, track_count FROM playlists ORDER BY title")
+            playlists = db.cursor.fetchall()
+            
             db.close()
             
             self.lbl_total_tracks.configure(text=f"Total Tracks: {count_tracks}")
             self.lbl_total_playlists.configure(text=f"Playlists: {count_playlists}")
+            
+            # Clear existing rows in scrollable frame
+            for widget in self.playlists_frame.winfo_children():
+                widget.destroy()
+                
+            # Populate rows
+            for title, count in playlists:
+                row = ctk.CTkFrame(self.playlists_frame, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                ctk.CTkLabel(row, text=title, anchor="w").pack(side="left", padx=10)
+                ctk.CTkLabel(row, text=f"{count} tracks", anchor="e").pack(side="right", padx=10)
+                
         except Exception as e:
             print(f"Stats Error: {e}")
 
@@ -283,8 +357,41 @@ class MusicBridgeApp(ctk.CTk):
 
         threading.Thread(target=wrapper, daemon=True).start()
 
+    def update_report(self, message):
+        self.report_box.configure(state="normal")
+        self.report_box.delete("0.0", "end")
+        self.report_box.insert("0.0", message)
+        self.report_box.configure(state="disabled")
+
     def run_scan(self):
-        self.run_in_thread(lambda: scanner.scan_library(progress_callback=self.update_progress), "🔍 Library Scan")
+        # Check both checkboxes (Library tab and Dashboard tab)
+        force = False
+        try:
+            if self.chk_force.get() == 1: force = True
+        except: pass
+        
+        def scan_wrapper():
+            result = scanner.scan_library(progress_callback=self.update_progress, force_update=force)
+            
+            # Update stats on main thread
+            self.after(0, self.refresh_stats)
+            
+            # Generate Report
+            added_songs = result.get('added_songs', {})
+            if added_songs:
+                report = "✅ Scan Complete. New songs added:\n\n"
+                for playlist, songs in added_songs.items():
+                    report += f"📂 {playlist}:\n"
+                    for song in songs:
+                        report += f"  • {song}\n"
+                    report += "\n"
+            else:
+                report = "Scan complete. No new songs found."
+            
+            # Show report on Dashboard (Main Thread)
+            self.after(0, lambda: self.update_report(report))
+            
+        self.run_in_thread(scan_wrapper, "🔍 Library Scan")
 
     def run_sort(self):
         def sort_wrapper():
@@ -311,17 +418,19 @@ class MusicBridgeApp(ctk.CTk):
         try:
             from db_manager import DBManager
             db = DBManager()
-            # We need to get track counts too.
-            # Let's do a join or just a separate query for now.
-            # Actually, the 'playlists' table has a 'track_count' column!
-            # Let's check db_manager.py init_db. Yes: track_count INTEGER.
             
-            db.cursor.execute('SELECT id, title, track_count FROM playlists ORDER BY title')
+            db.cursor.execute("SELECT id, title, track_count FROM playlists ORDER BY title")
             playlists = [{'id': r[0], 'title': r[1], 'count': r[2]} for r in db.cursor.fetchall()]
             db.close()
             
-            # Format: "Title (Count tracks) [ID]"
-            values = [f"{p['title']} ({p['count']} tracks) [{p['id']}]" for p in playlists]
+            # Create a map for lookup: "Title (Count)" -> ID
+            self.playlist_map = {}
+            values = []
+            for p in playlists:
+                display_name = f"{p['title']} ({p['count']} tracks)"
+                self.playlist_map[display_name] = p['id']
+                values.append(display_name)
+                
             self.playlist_combo.configure(values=values)
             if values:
                 self.playlist_combo.set(values[0])
@@ -330,11 +439,10 @@ class MusicBridgeApp(ctk.CTk):
 
     def run_cleaner(self):
         selection = self.playlist_combo.get()
-        if not selection or "[" not in selection:
+        if not selection or not hasattr(self, 'playlist_map') or selection not in self.playlist_map:
             return
             
-        # Extract ID from [ID]
-        pid = selection.split("[")[-1].replace("]", "")
+        pid = self.playlist_map[selection]
         title = selection.split(" (")[0]
         
         def clean_wrapper():
@@ -373,7 +481,160 @@ class MusicBridgeApp(ctk.CTk):
         import smart_playlists
         self.run_in_thread(lambda: smart_playlists.create_smart_playlist(name, rule_type, value, progress_callback=self.update_progress), f"✨ Creating {name}")
 
+    def refresh_organizer(self):
+        # Clear existing
+        for widget in self.org_scroll.winfo_children():
+            widget.destroy()
+            
+        self.org_status_label.configure(text="Scanning library for duplicates...", text_color="orange")
+        self.update_idletasks()
+        
+        def scan():
+            from db_manager import DBManager
+            db = DBManager()
+            duplicates = db.get_global_duplicates()
+            db.close()
+            
+            if not duplicates:
+                self.after(0, lambda: self.org_status_label.configure(text="✅ No global duplicates found.", text_color="#2ecc71"))
+                return
+
+            def populate():
+                self.org_status_label.configure(text=f"Found {len(duplicates)} conflicts.", text_color="orange")
+                
+                for item in duplicates:
+                    card = ctk.CTkFrame(self.org_scroll, fg_color="#2B2B2B")
+                    card.pack(fill="x", pady=5, padx=5)
+                    
+                    # Title
+                    ctk.CTkLabel(card, text=f"{item['title']} - {item['artist']}", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=5)
+                    
+                    # Playlists
+                    opts_frame = ctk.CTkFrame(card, fg_color="transparent")
+                    opts_frame.pack(fill="x", padx=10, pady=5)
+                    
+                    ctk.CTkLabel(opts_frame, text="Keep in:").pack(side="left", padx=5)
+                    
+                    for p in item['playlists']:
+                        def keep_in(pid=p['id'], vid=item['video_id'], title=p['title'], track_title=item['title'], card_ref=card):
+                            def _action():
+                                # Update Status (Main Thread)
+                                self.after(0, lambda: self.org_status_label.configure(text=f"⏳ Processing '{track_title}'...", text_color="orange"))
+                                
+                                # Heavy work (Background Thread)
+                                print(f"Keeping {vid} in {title} ({pid}), removing from others...")
+                                self.resolve_conflict(vid, pid)
+                                
+                                # UI Cleanup (Main Thread)
+                                def _cleanup():
+                                    card_ref.destroy() 
+                                    self.org_status_label.configure(text=f"✅ Kept '{track_title}' in '{title}' and cleaned duplicates.", text_color="#2ecc71")
+                                self.after(0, _cleanup)
+                                
+                            threading.Thread(target=_action, daemon=True).start()
+                            
+                        ctk.CTkButton(opts_frame, text=p['title'], command=keep_in, height=25, width=100).pack(side="left", padx=5)
+            
+            self.after(0, populate)
+            
+        threading.Thread(target=scan, daemon=True).start()
+
+    def resolve_conflict(self, video_id, keep_playlist_id):
+        from db_manager import DBManager
+        import sorter
+        
+        db = DBManager()
+        pm = sorter.PlaylistManager()
+        
+        # Get all playlists this track is in
+        db.cursor.execute("SELECT playlist_id FROM playlist_tracks WHERE video_id = ?", (video_id,))
+        all_pids = [r[0] for r in db.cursor.fetchall()]
+        
+        to_remove_from = list(set([pid for pid in all_pids if pid != keep_playlist_id]))
+        
+        print(f"Keeping in {keep_playlist_id}, removing from {to_remove_from}")
+        
+        for pid in to_remove_from:
+            # Try to get setVideoId from DB
+            db.cursor.execute("SELECT set_video_id FROM playlist_tracks WHERE playlist_id = ? AND video_id = ?", (pid, video_id))
+            set_vids = db.cursor.fetchall()
+            
+            items_to_remove = [{'setVideoId': sv[0]} for sv in set_vids if sv[0]]
+            
+            # Fallback: If DB doesn't have setVideoId, fetch from YTM
+            if not items_to_remove:
+                print(f"⚠️ No setVideoId in DB for playlist {pid}. Fetching from YTM...")
+                try:
+                    playlist_data = pm.yt.get_playlist(pid)
+                    tracks = playlist_data.get('tracks', [])
+                    for t in tracks:
+                        if t.get('videoId') == video_id:
+                            items_to_remove.append({'setVideoId': t.get('setVideoId')})
+                except Exception as e:
+                    print(f"❌ Error fetching playlist {pid}: {e}")
+
+            if items_to_remove:
+                try:
+                    pm.yt.remove_playlist_items(pid, items_to_remove)
+                    print(f"✅ Removed {len(items_to_remove)} items from {pid}")
+                except Exception as e:
+                    print(f"⚠️ Failed to remove with DB ID: {e}")
+                    print(f"🔄 Fetching fresh setVideoId from YTM for {pid}...")
+                    
+                    # Retry with fresh data
+                    items_to_remove = []
+                    try:
+                        # Fetch ALL tracks (limit=None) to ensure we find it if it exists
+                        playlist_data = pm.yt.get_playlist(pid, limit=None)
+                        
+                        tracks = playlist_data.get('tracks', [])
+                        for t in tracks:
+                            if t.get('videoId') == video_id:
+                                svid = t.get('setVideoId')
+                                if svid:
+                                    items_to_remove.append({'setVideoId': svid})
+                        
+                        if items_to_remove:
+                            pm.yt.remove_playlist_items(pid, items_to_remove)
+                            print(f"✅ Retry Success: Removed {len(items_to_remove)} items from {pid}")
+                        else:
+                            print(f"❌ Song {video_id} not found in fresh fetch of {pid}. It may have been deleted externally.")
+                            print("⚠️ Removing from local DB to resolve ghost conflict.")
+                            # The DB delete happens below automatically
+                    except Exception as retry_e:
+                        print(f"❌ Retry Failed: {retry_e}")
+            else:
+                print(f"⚠️ Could not find item to remove in {pid} (checked DB and YTM).")
+
+            # Always remove from DB to keep UI consistent
+            db.cursor.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND video_id = ?", (pid, video_id))
+            db.conn.commit()
+        
+        # Also deduplicate the target playlist to ensure only 1 copy remains there
+        print(f"Deduplicating target playlist {keep_playlist_id}...")
+        try:
+            pm.deduplicate_playlist(keep_playlist_id)
+        except Exception as e:
+            print(f"Error deduplicating target: {e}")
+
+        db.close()
+
 if __name__ == "__main__":
+    # --- Single Instance Check ---
+    import socket
+    from tkinter import messagebox
+    
+    # Create a socket and try to bind to a specific port
+    # If it fails, another instance is likely running
+    instance_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # Port 12345 (Change if needed)
+        instance_socket.bind(('127.0.0.1', 12345))
+    except socket.error:
+        messagebox.showerror("MusicBridge", "MusicBridge is already running!")
+        sys.exit(1)
+    # -----------------------------
+
     ctk.set_appearance_mode("Dark")
     ctk.set_default_color_theme("blue")
     app = MusicBridgeApp()

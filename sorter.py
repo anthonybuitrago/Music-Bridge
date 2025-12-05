@@ -78,6 +78,20 @@ class PlaylistManager:
         if items_to_remove:
             self.yt.remove_playlist_items(playlist_id, items_to_remove)
             print(f"Successfully removed {len(items_to_remove)} duplicates.")
+            
+            # Update Local DB
+            try:
+                from db_manager import DBManager
+                db = DBManager()
+                for track in items_to_remove:
+                    # We need to remove specific setVideoId entries
+                    svid = track.get('setVideoId')
+                    if svid:
+                        db.cursor.execute("DELETE FROM playlist_tracks WHERE set_video_id = ?", (svid,))
+                db.conn.commit()
+                db.close()
+            except Exception as e:
+                print(f"Error updating DB after deduplication: {e}")
         else:
             print("Could not remove duplicates (missing setVideoId).")
 
