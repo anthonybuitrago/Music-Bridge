@@ -3,22 +3,28 @@ import sys
 
 def setup_logger(name="MusicBridge"):
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG) # Allow all levels to pass to handlers
     
     # Check if handlers already exist to avoid duplicates
     if not logger.handlers:
-        # File Handler
-        file_handler = logging.FileHandler("app.log", encoding='utf-8')
+        # File Handler (Captures everything, including DEBUG)
+        from logging.handlers import RotatingFileHandler
+        # 1MB limit, 1 backup file (app.log.1)
+        file_handler = RotatingFileHandler("app.log", maxBytes=1_000_000, backupCount=1, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
         
-        # Console Handler
+        # Console Handler (Only INFO and above, keeps CLI clean)
         # Force UTF-8 for console to handle emojis on Windows
         if sys.platform == "win32":
-            sys.stdout.reconfigure(encoding='utf-8')
+            try:
+                sys.stdout.reconfigure(encoding='utf-8')
+            except: pass
             
         console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
         console_formatter = logging.Formatter('%(message)s') # Keep console clean
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)

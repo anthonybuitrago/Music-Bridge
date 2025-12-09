@@ -14,7 +14,7 @@ def scan_library(progress_callback=None, force_update=False):
     pm = PlaylistManager()
     db = DBManager()
     
-    logger.info("Fetching playlists from YouTube Music...")
+    logger.debug("ℹ️ Fetching playlists from YouTube Music...")
     if progress_callback:
         progress_callback(0, 0, "Fetching playlists...")
         
@@ -28,7 +28,21 @@ def scan_library(progress_callback=None, force_update=False):
     valid_playlists = [p for p in playlists if p['playlistId'] not in ignored_ids]
     
     total = len(valid_playlists)
-    logger.info(f"Found {total} user playlists (filtered system lists).")
+    logger.debug(f"Found {total} user playlists (filtered system lists).")
+    
+    # --- SAFETY CHECK ---
+    if total == 0:
+        logger.warning("⚠️ No playlists found! Aborting scan to prevent database wipe.")
+        logger.warning("Please update your 'headers_auth.json'.")
+        # Return error/abort state found
+        return {
+            'scanned': 0, 
+            'skipped': 0, 
+            'orphans_removed': 0, 
+            'added_songs': {}, 
+            'error': 'NO_PLAYLISTS_FOUND'
+        }
+    # --------------------
     
     # --- SYNC DELETIONS ---
     # (Keep existing deletion logic)
@@ -62,16 +76,16 @@ def scan_library(progress_callback=None, force_update=False):
         
         if not force_update and local_count == remote_count:
             skipped_count += 1
-            msg = f"Skipping: {title} (No changes)"
-            logger.info(f"[{i+1}/{total}] {msg}")
+            # msg = f"Skipping: {title} (No changes)" # Redundant
+            logger.debug(f"Skipping: {title} (No changes)")
             if progress_callback:
-                progress_callback(i+1, total, msg)
+                progress_callback(i+1, total, f"Skipping: {title}")
         else:
             to_scan.append((i, p))
 
     # Parallel Scan for the rest
     if to_scan:
-        logger.info(f"Scanning {len(to_scan)} playlists in parallel...")
+        logger.debug(f"Scanning {len(to_scan)} playlists in parallel...")
         with ThreadPoolExecutor(max_workers=5) as executor:
             # Submit all tasks
             future_to_meta = {
@@ -83,8 +97,8 @@ def scan_library(progress_callback=None, force_update=False):
                 title = p['title']
                 pid = p['playlistId']
                 
-                msg = f"📂 {title}"
-                logger.info(msg)
+                msg = f"Scanning {title}"
+                logger.debug(msg)
                 
                 if progress_callback:
                     progress_callback(i+1, total, msg)
@@ -100,7 +114,7 @@ def scan_library(progress_callback=None, force_update=False):
                     db.commit() # Commit this playlist
                     
                     if new_tracks_count > 0:
-                        logger.info(f"✨ Added {new_tracks_count} new tracks to {title}")
+                        logger.debug(f"Added {new_tracks_count} new tracks to {title}")
                         if 'added_songs' not in result: result['added_songs'] = {}
                         result['added_songs'][title] = added_titles
                         
@@ -108,12 +122,13 @@ def scan_library(progress_callback=None, force_update=False):
                     logger.error(f"Error scanning {title}: {e}")
 
     # --- CLEANUP & EXPORT ---
-    logger.info("Running database cleanup...")
+    logger.debug("") # Force newline to clear header from progress bar
+    logger.debug("Running database cleanup...")
     dt, da = db.cleanup_orphans()
     if dt > 0 or da > 0:
-        logger.info(f"Cleaned {dt} orphan tracks and {da} orphan artists.")
+        logger.debug(f"Cleaned {dt} orphan tracks and {da} orphan artists.")
         
-    logger.info("Exporting library backup...")
+    logger.debug("Exporting library backup...")
     try:
         import json
         playlists = db.get_all_playlists()
@@ -126,14 +141,14 @@ def scan_library(progress_callback=None, force_update=False):
             
         with open('library_backup.json', 'w', encoding='utf-8') as f:
             json.dump(library_data, f, indent=2, ensure_ascii=False)
-        logger.info("Backup saved to library_backup.json")
+        logger.debug("Backup saved to library_backup.json")
     except Exception as e:
         logger.error(f"Backup failed: {e}")
     # ------------------------
 
-    logger.info("Scan complete.")
+    logger.debug("Library Scan Completed.")
     if progress_callback:
-        progress_callback(total, total, "Library Scan Completed.")
+        progress_callback(total, total, "Done") # Standard completion signal within callback
         
     # Get final stats for report
     db.cursor.execute("SELECT COUNT(*) FROM tracks")
@@ -148,10 +163,25 @@ def scan_library(progress_callback=None, force_update=False):
         'total_playlists': total,
         'skipped': skipped_count,
         'scanned': len(to_scan),
-        'orphans_removed': dt
+        'orphans_removed': dt,
+        'found_playlists': [p['title'] for p in valid_playlists]
     })
     
     db.close()
+    
+    # Persist scan status for 'sort' command visibility
+    import json
+    try:
+        status_data = {}
+        if result.get('added_songs'):
+            for pname, songs in result['added_songs'].items():
+                status_data[pname] = len(songs)
+        
+        with open('scan_status.json', 'w', encoding='utf-8') as f:
+            json.dump(status_data, f)
+    except Exception as e:
+        logger.warning(f"Failed to save scan status: {e}")
+
     return result
 
 if __name__ == "__main__":

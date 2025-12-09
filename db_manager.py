@@ -200,6 +200,37 @@ class DBManager:
         self.cursor.execute('SELECT id, title, description FROM playlists')
         return [{'id': r[0], 'title': r[1], 'description': r[2]} for r in self.cursor.fetchall()]
 
+    def get_playlist_tracks_details(self, playlist_id):
+        """
+        Returns full track details for a playlist, ordered by position.
+        Format matches what 'sorter.py' expects from Data API.
+        """
+        self.cursor.execute('''
+            SELECT t.video_id, t.title, t.artist, t.album, t.duration
+            FROM playlist_tracks pt
+            JOIN tracks t ON pt.video_id = t.video_id
+            WHERE pt.playlist_id = ?
+            ORDER BY pt.rowid
+        ''', (playlist_id,))
+        
+        results = []
+        for r in self.cursor.fetchall():
+            # Convert string artist back to list format for sorter compatibility
+            # DB stores "Artist 1, Artist 2", sorter expects [{'name': 'Artist 1'}, ...]
+            # For sorting purposes, the raw string is actually fine if we adjust the sorter key,
+            # but let's try to match the expected format to minimize sorter changes.
+            artist_str = r[2]
+            artists = [{'name': artist_str}] # Simplified
+            
+            results.append({
+                'videoId': r[0],
+                'title': r[1],
+                'artists': artists,
+                'album': {'name': r[3]},
+                'duration': r[4]
+            })
+        return results
+
     def get_playlist_tracks(self, playlist_id):
         """Returns all video_ids for a playlist, ordered by insertion (rowid)."""
         self.cursor.execute('''

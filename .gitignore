@@ -24,6 +24,9 @@ config.json
 *.log
 missing_on_spotify.md
 library_report.md
+library_backup.json
+library_export.csv
+scan_status.json
 
 # IDE
 .vscode/
